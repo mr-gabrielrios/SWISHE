@@ -266,7 +266,17 @@ logical :: ncar_ocean_flux_orig  = .false. ! for backwards compatibility
 logical :: raoult_sat_vap        = .false.
 logical :: do_simple             = .false.
 
+! GR edit: addition of Wenchang Yang's (WY) parameters for KillTC
+!WY: parameters used to kill TC by capping evap windspeed at w_cddt where
+!sst > sst_cddt. No cap where sst < sst_cddt - dsst_ddt. Taper in between.
+real    :: w_cddt                = 7.5 !WY: critical wind threshold in evap cap
+real    :: wcap_cddt             = 12.0 !WY: critical wind threshold in evap cap, windspeed capped if >w_cddt and <w0_cddt
+real    :: w0_cddt               = 14.5 !WY: critical wind threshold in evap cap, windspeed=0 if >=w0_cddt
+real    :: wmin_ddt              = 0.0 !WY: minimum w_atm to be set if>w0_cddt
+real    :: sst_cddt              = 25.0 !WY: critical sst threshold in evap cap
+real    :: dsst_ddt              = 1.0 !WY: sst taper width in evap cap
 
+! GR edit: addition of Wenchang Yang's (WY) parameters to namelist
 namelist /surface_flux_nml/ no_neg_q,             &
                             use_virtual_temp,     &
                             alt_gustiness,        &
@@ -277,7 +287,13 @@ namelist /surface_flux_nml/ no_neg_q,             &
                             ncar_ocean_flux,      &
                             ncar_ocean_flux_orig, &
                             raoult_sat_vap,       &
-                            do_simple       
+                            do_simple,            &
+                            w_cddt, &
+                            wcap_cddt, &
+                            w0_cddt, &
+                            wmin_ddt, &
+                            sst_cddt, &
+                            dsst_ddt
    
 
 
@@ -340,7 +356,9 @@ subroutine surface_flux_1d (                                           &
      w_atm,     u_star,     b_star,     q_star,                        &
      dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
      dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-     dt,        land,      seawater,     avail  )
+     dt,        land,      seawater,     avail, &
+     ! GR edits for SWISHE modification
+     vort850, rh500, rh700, rh850, swfq, lat_bnd)
 !</PUBLICROUTINE>
 !  slm Mar 28 2002 -- remove agument drag_q since it is just cd_q*wind
 ! ============================================================================
@@ -350,7 +368,9 @@ subroutine surface_flux_1d (                                           &
        t_atm,     q_atm_in,   u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,  &
-       rough_mom, rough_heat, rough_moist,  rough_scale, gust
+       rough_mom, rough_heat, rough_moist,  rough_scale, gust, &
+       ! GR edit: addition of input fields for SWISHE
+       vort850, rh500, rh700, rh850 lat_bnd
   real, intent(out), dimension(:) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
@@ -358,6 +378,8 @@ subroutine surface_flux_1d (                                           &
        w_atm,     u_star,     b_star,    q_star,             &
        cd_m,      cd_t,       cd_q
   real, intent(inout), dimension(:) :: q_surf
+  ! GR edit: addition of in/out field for SWISHE frequency
+  real, intent(inout), dimension(:) :: swfq
   real, intent(in) :: dt
 
   ! ---- local constants -----------------------------------------------------
@@ -371,6 +393,15 @@ subroutine surface_flux_1d (                                           &
        t_surf0,  t_surf1,  u_dif,     v_dif,               &
        rho_drag, drag_t,    drag_m,   drag_q,    rho,      &
        q_atm,    q_surf0,  dw_atmdu,  dw_atmdv,  w_gust
+
+  ! GR edit: addition of local SWISHE fields
+  real, dimension(size(vort850(:))) :: &
+       rh500_weighted, rh700_weighted, rh850_weighted, vort850_weighted, es_thresh
+
+  real, dimension(size(t_atm(:))) :: alpha !!WY: weight used in kill_tc taper
+  real, dimension(size(t_atm(:))) :: w_atm_q !!WY: modified w_atm used in drag_q
+  alpha = 0.0 !WY: default is 0
+  w_atm_q = 0 !WY
 
   integer :: i, nbad
 
@@ -478,26 +509,96 @@ subroutine surface_flux_1d (                                           &
                              seawater, cd_m, cd_t, cd_q, u_star, b_star     )
   end if
 
+  ! -------------------------------------------------------------------------
+  ! GR edit: Begin SWISHE application
+
+  ! Define an evaporation suppression index to prevent a binary approach from
+  ! not being applied to relevant TC-like vortices
+
+  rh500_weighted      = merge(0.5, 0.0, (rh500 .ge. 60))
+  rh700_weighted      = merge(1.0, 0.0, (rh700 .ge. 70))
+  rh850_weighted      = merge(1.0, 0.0, (rh850 .ge. 75))
+  vort850_weighted    = merge(0.5, 0.0, (abs(vort850) .ge. 1e-4))
+  do i = 1, size(rh500_weighted)
+      es_thresh(i)    = rh500_weighted(i) + rh700_weighted(i) &
+                        + rh850_weighted(i) + vort850_weighted(i)
+  enddo
+  
+  swfq = merge(1.0, 0.0, & (seawater) .and. (avail) .and. (w_atm > w0_cddt) &
+                           .and. (t_surf0 - 273.15 - sst_cddt > 0) .and. (es_thresh .ge. 2.5))
+
+  ! GR edit: End SWISHE application
+  ! -------------------------------------------------------------------------
+
+
+  ! GR edit: performed combined KillTC (credit: Wenchang Yang) and SWISHE operations
   where (avail)
-     ! scale momentum drag coefficient on orographic roughness
-     cd_m = cd_m*(log(z_atm/rough_mom+1)/log(z_atm/rough_scale+1))**2
-     ! surface layer drag coefficients
-     drag_t = cd_t * w_atm
-     drag_q = cd_q * w_atm
-     drag_m = cd_m * w_atm
 
-     ! density
-     rho = p_atm / (rdgas * tv_atm)  
+    ! scale momentum drag coefficient on orographic roughness
+    cd_m = cd_m*(log(z_atm/rough_mom+1)/log(z_atm/rough_scale+1))**2
+    ! surface layer drag coefficients
+    drag_t = cd_t * w_atm
 
-     ! sensible heat flux
-     rho_drag = cp_air * drag_t * rho
-     flux_t = rho_drag * (t_surf0 - th_atm)  ! flux of sensible heat (W/m**2)
-     dhdt_surf =  rho_drag                   ! d(sensible heat flux)/d(surface temperature)
-     dhdt_atm  = -rho_drag*p_ratio           ! d(sensible heat flux)/d(atmos temperature)
+    !WY: try to kill TC by capping evap wind speed over high SST grids
+    where (seawater)
 
-     ! evaporation
-     rho_drag  =  drag_q * rho
-     flux_q    =  rho_drag * (q_surf0 - q_atm) ! flux of water vapor  (Kg/(m**2 s))
+        ! GR edit (2023-07-06): impose vorticity threshold similar to Lucas
+        ! Harris' TC tracker (see GFDL Quick Tracks and Harris et al
+        ! (2016, J. Clim.))
+
+        ! GR edit: apply SWISHE index threshold
+        where (es_thresh .ge. 2.5)
+            !WY: first get the w_atm_q
+            where(w_atm>w0_cddt)
+                w_atm_q = wmin_ddt !WY: set to wmin_ddt if very strong wind speed (>w0_cddt)
+            elsewhere(w_atm>wcap_cddt)
+                !WY: linearly decreases to 0 if w_atm between wcap_cddt and w0_cddt
+                w_atm_q = w_cddt - (w_atm - wcap_cddt)*(w_cddt - wmin_ddt)/(w0_cddt - wcap_cddt)
+            elsewhere(w_atm>w_cddt)
+                w_atm_q = w_cddt !WY: constant if w_atm between w_cddt and wcap_cddt
+            elsewhere
+                w_atm_q = w_atm !WY: w_atm if w_atm<w_cddt
+            endwhere
+
+            !WY: second, apply to warm SSTs
+            where(t_surf0 - 273.15 - sst_cddt>0)
+                !WY: warm sst grids cap the evap wind speed
+                !drag_q = cd_q * min(w_cddt, w_atm)
+                !WY: apply w_atm_q to warm SSTs
+                drag_q = cd_q * w_atm_q
+            elsewhere(t_surf0 - 273.15 - sst_cddt + dsst_ddt<0)
+                drag_q = cd_q * w_atm !WY: cold sst grids use the default w_atm
+            elsewhere
+                !WY: taper sst: weighted average
+                !WY: sst_cddt-dsst_ddt<=t_surf0-273.15<=sst_cddt
+                !WY: alpha -> 1 when t_surf0-273.15 -> sst_cddt, warmer
+                !WY: alpha -> 0 when t_surf0-273.15 -> sst_cddt-dsst_ddt, cooler
+                alpha = (t_surf0 - 273.15 - sst_cddt + dsst_ddt)/dsst_ddt
+                !drag_q = cd_q * (alpha*min(w_cddt, w_atm) + (1-alpha)*w_atm )
+                drag_q = cd_q * (alpha*w_atm_q + (1-alpha)*w_atm )
+            endwhere
+        elsewhere
+            drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
+        endwhere
+
+    elsewhere
+        drag_q = cd_q * w_atm !WY: model's default over non-seawater grids
+    endwhere
+    !WY: end effort of killing TC
+    drag_m = cd_m * w_atm
+
+    ! density
+    rho = p_atm / (rdgas * tv_atm)
+
+    ! sensible heat flux
+    rho_drag = cp_air * drag_t * rho
+    flux_t = rho_drag * (t_surf0 - th_atm)  ! flux of sensible heat (W/m**2)
+    dhdt_surf =  rho_drag                   ! d(sensible heat flux)/d(surface temperature)
+    dhdt_atm  = -rho_drag*p_ratio           ! d(sensible heat flux)/d(atmos temperature)
+
+    ! evaporation
+    rho_drag  =  drag_q * rho
+    flux_q    =  rho_drag * (q_surf0 - q_atm) ! flux of water vapor  (Kg/(m**2 s))
 
      where (land)
         dedq_surf = rho_drag
@@ -572,7 +673,10 @@ subroutine surface_flux_0d (                                                 &
      w_atm_0,     u_star_0,     b_star_0,     q_star_0,                      &
      dhdt_surf_0, dedt_surf_0,  dedq_surf_0,  drdt_surf_0,                   &
      dhdt_atm_0,  dedq_atm_0,   dtaudu_atm_0, dtaudv_atm_0,                  &
-     dt,          land_0,       seawater_0,  avail_0  )
+     dt,          land_0,       seawater_0,  avail_0, &
+     ! Begin GR edit for SWISHE modifications
+     vort850_0, rh500_0, rh700_0, rh850_0, swfq_0, lat_bnd_0
+     ! End GR edit for SWISHE modifications)
 
   ! ---- arguments -----------------------------------------------------------
   logical, intent(in) :: land_0,  seawater_0, avail_0
@@ -580,7 +684,10 @@ subroutine surface_flux_0d (                                                 &
        t_atm_0,     q_atm_0,      u_atm_0,     v_atm_0,                &
        p_atm_0,     z_atm_0,      t_ca_0,                              &
        p_surf_0,    t_surf_0,     u_surf_0,    v_surf_0,               &
-       rough_mom_0, rough_heat_0, rough_moist_0, rough_scale_0, gust_0
+       rough_mom_0, rough_heat_0, rough_moist_0, rough_scale_0, gust_0, &
+       ! Begin GR edit for SWISHE modifications
+       vort850_0, rh500_0, rh700_0, rh850_0, lat_bnd_0
+       ! End GR edit for SWISHE modifications
   real, intent(out) ::                                                 &
        flux_t_0,    flux_q_0,     flux_r_0,    flux_u_0,  flux_v_0,    &
        dhdt_surf_0, dedt_surf_0,  dedq_surf_0, drdt_surf_0,            &
@@ -588,6 +695,8 @@ subroutine surface_flux_0d (                                                 &
        w_atm_0,     u_star_0,     b_star_0,    q_star_0,               &
        cd_m_0,      cd_t_0,       cd_q_0
   real, intent(inout) :: q_surf_0
+  ! GR edit: in/out field for SWISHE application
+  real, intent(inout) :: swfq_0
   real, intent(in)    :: dt
 
   ! ---- local vars ----------------------------------------------------------
@@ -596,7 +705,10 @@ subroutine surface_flux_0d (                                                 &
        t_atm,     q_atm,      u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,             &
-       rough_mom, rough_heat, rough_moist,  rough_scale, gust
+       rough_mom, rough_heat, rough_moist,  rough_scale, gust, &
+       ! Begin GR edit for SWISHE modifications
+       vort850, rh500, rh700, rh850, lat_bnd
+       ! End GR edit for SWISHE modifications
   real, dimension(1) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
@@ -604,6 +716,8 @@ subroutine surface_flux_0d (                                                 &
        w_atm,     u_star,     b_star,    q_star,             &
        cd_m,      cd_t,       cd_q
   real, dimension(1) :: q_surf
+  ! GR edit: in/out field for SWISHE application
+  real, dimension(1) :: swfq
 
 
   avail = .true.
@@ -628,6 +742,14 @@ subroutine surface_flux_0d (                                                 &
   land(1)        = land_0
   seawater(1)    = seawater_0
   avail(1)       = avail_0
+  ! Begin GR edit for SWISHE modifications
+  vort850(1)     = vort850_0
+  rh500(1)       = rh500_0
+  rh700(1)       = rh700_0
+  rh850(1)       = rh850_0
+  swfq(1)        = swfq_0
+  lat_bnd(1)     = lat_bnd_0
+  ! End GR edit for SWISHE modifications
 
   call surface_flux_1d (                                                 &
        t_atm,     q_atm,      u_atm,     v_atm,     p_atm,     z_atm,    &
@@ -639,7 +761,9 @@ subroutine surface_flux_0d (                                                 &
        w_atm,     u_star,     b_star,     q_star,                        &
        dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
        dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-       dt,        land,      seawater, avail  )
+       dt,        land,      seawater, avail, &
+       ! GR edits for SWISHE modifications
+       vort850, rh500, rh700, rh850, swfq, lat_bnd)
 
   flux_t_0     = flux_t(1)
   flux_q_0     = flux_q(1)
@@ -675,7 +799,9 @@ subroutine surface_flux_2d (                                           &
      w_atm,     u_star,     b_star,     q_star,                        &
      dhdt_surf, dedt_surf,  dedq_surf,  drdt_surf,                     &
      dhdt_atm,  dedq_atm,   dtaudu_atm, dtaudv_atm,                    &
-     dt,        land,       seawater,  avail  )
+     dt,        land,       seawater,  avail, &
+     ! GR edits for SWISHE modifications
+     vort850, rh500, rh700, rh850, swfq, lat_bnd)
 
   ! ---- arguments -----------------------------------------------------------
   logical, intent(in), dimension(:,:) :: land,  seawater, avail
@@ -683,7 +809,9 @@ subroutine surface_flux_2d (                                           &
        t_atm,     q_atm_in,   u_atm,     v_atm,              &
        p_atm,     z_atm,      t_ca,                          &
        p_surf,    t_surf,     u_surf,    v_surf,             &
-       rough_mom, rough_heat, rough_moist, rough_scale, gust
+       rough_mom, rough_heat, rough_moist, rough_scale, gust, &
+       ! GR edits for SWISHE modifications
+       vort850, rh500, rh700, rh850, lat_bnd
   real, intent(out), dimension(:,:) :: &
        flux_t,    flux_q,     flux_r,    flux_u,  flux_v,    &
        dhdt_surf, dedt_surf,  dedq_surf, drdt_surf,          &
@@ -691,6 +819,8 @@ subroutine surface_flux_2d (                                           &
        w_atm,     u_star,     b_star,    q_star,             &
        cd_m,      cd_t,       cd_q
   real, intent(inout), dimension(:,:) :: q_surf
+  ! GR edits for SWISHE modifications
+  real, intent(inout), dimension(:,:) :: swfq
   real, intent(in) :: dt
 
   ! ---- local vars -----------------------------------------------------------
@@ -707,7 +837,9 @@ subroutine surface_flux_2d (                                           &
           w_atm(:,j),     u_star(:,j),     b_star(:,j),     q_star(:,j),                                  &
           dhdt_surf(:,j), dedt_surf(:,j),  dedq_surf(:,j),  drdt_surf(:,j),                               &
           dhdt_atm(:,j),  dedq_atm(:,j),   dtaudu_atm(:,j), dtaudv_atm(:,j),                              &
-          dt,             land(:,j),       seawater(:,j),  avail(:,j)  )
+          dt,             land(:,j),       seawater(:,j),  avail(:,j), &
+          ! GR edits for SWISHE modifications
+          vort850(:,j), rh500(:,j), rh700(:,j), rh850(:,j), swfq(:,j), lat_bnd(:,j) )
   end do
 end subroutine surface_flux_2d
 

@@ -283,7 +283,8 @@ character(len=4), parameter :: mod_name = 'flux'
      id_del_h,  id_del_m,  id_del_q,  id_rough_scale,         &
      id_t_ca,   id_q_surf, id_q_atm, id_z_atm, id_p_atm, id_gust, &
      id_t_ref_land, id_rh_ref_land, id_u_ref_land, id_v_ref_land, &
-     id_q_ref,  id_q_ref_land, id_q_flux_land, id_rh_ref_cmip
+     id_q_ref,  id_q_ref_land, id_q_flux_land, id_rh_ref_cmip, &
+     id_vort850, id_rh500, id_rh700, id_rh850, id_swfq ! GR edit: addition of SWISHE fields
 
 integer :: id_co2_atm_dvmr, id_co2_surf_dvmr
 
@@ -1184,6 +1185,13 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
        ex_p_atm,      &
        ex_u_atm, ex_v_atm,    &
        ex_gust,       &
+       ! Begin GR edit for SWISHE modifications
+       ex_vort850, &
+       ex_rh500, &
+       ex_rh700, &
+       ex_rh850, &
+       ex_swfq, &
+       ! End GR edit for SWISHE modifications
        ex_t_surf4,    &
        ex_u_surf, ex_v_surf,  &
        ex_rough_mom, ex_rough_heat, ex_rough_moist, &
@@ -1201,6 +1209,8 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
        ex_seawater,   &
        ex_frac_open_sea
 
+  ! GR edit: addition of latitude band for SWISHE application
+  real, dimension(size(Atm%lat_bnd,1)) :: ex_lat_bnd
   real, dimension(n_xgrid_sfc,n_exch_tr) :: ex_tr_atm
 ! jgj: added for co2_atm diagnostic
   real, dimension(n_xgrid_sfc)           :: ex_co2_atm_dvmr
@@ -1240,6 +1250,9 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
        ex_drag_q   (n_xgrid_sfc),  &
        ex_avail    (n_xgrid_sfc),  &
        ex_f_t_delt_n(n_xgrid_sfc), &
+       ! Begin GR edit for SWISHE application frequency
+       ex_swfq     (n_xgrid_sfc), &
+       ! End GR edit for SWISHE application frequency
 
        ex_tr_surf     (n_xgrid_sfc, n_exch_tr), &
        ex_dfdtr_surf  (n_xgrid_sfc, n_exch_tr), &
@@ -1316,6 +1329,12 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
   ex_t_surf   = 200.
   ex_u_surf   =   0.
   ex_v_surf   =   0.
+  ! Begin GR edit for SWISHE modifications
+  ex_vort850 = 0.
+  ex_rh500 = 0.
+  ex_rh700 = 0.
+  ex_rh850 = 0.
+  ! End GR edit for SWISHE modifications
   ex_albedo = 0. ! bw 
   ex_albedo_vis_dir = 0.
   ex_albedo_nir_dir = 0.
@@ -1337,6 +1356,14 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
   call data_override ('ATM', 'p_surf', Atm%p_surf, Time)
   call data_override ('ATM', 'slp',    Atm%slp,    Time)
   call data_override ('ATM', 'gust',   Atm%gust,   Time)
+  ! Begin GR edit for SWISHE modifications
+  call data_override ('ATM', 'vort850', Atm%vort850, Time)
+  call data_override ('ATM', 'rh500',   Atm%rh500,   Time)
+  call data_override ('ATM', 'rh700',   Atm%rh700,   Time)
+  call data_override ('ATM', 'rh850',   Atm%rh850,   Time)
+  call data_override ('ATM', 'swfq',    Atm%swfq,    Time)
+  ! End GR edit for SWISHE modifications
+
 !
 ! jgj: 2008/07/18 
 ! FV atm advects tracers in moist mass mixing ratio: kg co2 /(kg air + kg water)
@@ -1438,6 +1465,13 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
   call put_to_xgrid (Atm%p_surf, 'ATM', ex_p_surf, xmap_sfc, remap_method=remap_method, complete=.false.)
   call put_to_xgrid (Atm%slp,    'ATM', ex_slp,    xmap_sfc, remap_method=remap_method, complete=.false.)
   call put_to_xgrid (Atm%gust,   'ATM', ex_gust,   xmap_sfc, remap_method=remap_method, complete=.true.)
+  ! Begin GR edits for SWISHE modifications
+  call put_to_xgrid (Atm%vort850, 'ATM', ex_vort850, xmap_sfc, remap_method=remap_method, complete=.true.)
+  call put_to_xgrid (Atm%rh500,   'ATM', ex_rh500,   xmap_sfc, remap_method=remap_method, complete=.true.)
+  call put_to_xgrid (Atm%rh700,   'ATM', ex_rh700,   xmap_sfc, remap_method=remap_method, complete=.true.)
+  call put_to_xgrid (Atm%rh850,   'ATM', ex_rh850,   xmap_sfc, remap_method=remap_method, complete=.true.)
+  call put_to_xgrid (Atm%swfq,    'ATM', ex_swfq,    xmap_sfc, remap_method=remap_method, complete=.true.)
+  ! End GR edits for SWISHE modifications
 
   ! slm, Mar 20 2002: changed order in whith the data transferred from ice and land 
   ! grids, to fill t_ca first with t_surf over ocean and then with t_ca from 
@@ -1538,6 +1572,9 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
      ex_t_surf = ex_t_surf_miz
   end if
 
+  ! GR edit for SWISHE modifiction
+  ex_lat_bnd = Atm%lat_bnd(:, 1)
+
   ! [5] compute explicit fluxes and tendencies at all available points ---
   call some(xmap_sfc, ex_avail)
   call surface_flux (&
@@ -1552,7 +1589,9 @@ subroutine sfc_boundary_layer ( dt, Time, Atm, Land, Ice, Land_Ice_Atmos_Boundar
        ex_dhdt_surf, ex_dedt_surf, ex_dfdtr_surf(:,isphum),  ex_drdt_surf,        &
        ex_dhdt_atm,  ex_dfdtr_atm(:,isphum),  ex_dtaudu_atm, ex_dtaudv_atm,       &
        dt,                                                             &
-       ex_land, ex_seawater .gt. 0.0,  ex_avail                          )
+       ex_land, ex_seawater .gt. 0.0,  ex_avail,                       &
+       ! GR edits for SWISHE inputs to surface flux subroutine
+       ex_vort850, ex_rh500, ex_rh700, ex_rh850, ex_swfq, ex_lat_bnd)
 
 #ifdef SCM
 ! Option to override surface fluxes for SCM
@@ -3469,6 +3508,12 @@ subroutine flux_up_to_atmos ( Time, Land, Ice, Land_Ice_Atmos_Boundary, Land_bou
      call get_from_xgrid (diag_atm, 'ATM', ex_flux_t, xmap_sfc)
      used = send_data ( id_t_flux, diag_atm, Time )
   endif
+  
+  !------- SWISHE application frequency -----------
+  if ( id_swfq > 0 ) then
+     call get_from_xgrid (diag_atm, 'ATM', ex_swfq, xmap_sfc)
+     used = send_data ( id_swfq, diag_atm, Time )
+  endif
 
   !------- net longwave flux -----------
   if ( id_r_flux > 0 ) then
@@ -3570,7 +3615,11 @@ subroutine flux_up_to_atmos ( Time, Land, Ice, Land_Ice_Atmos_Boundary, Land_bou
        ex_f_t_delt_n, &
        ex_tr_surf  ,  &
        
-  ex_dfdtr_surf  , &
+       ! Begin GR edits for SWISHE modification
+       ex_swfq, &
+       ! End GR edits for SWISHE modification
+
+       ex_dfdtr_surf  , &
        ex_dfdtr_atm   , &
        ex_flux_tr     , &
        ex_f_tr_delt_n , &
@@ -3938,6 +3987,14 @@ subroutine diag_field_init ( Time, atmos_axes, land_axes )
   id_gust       = &
        register_diag_field ( mod_name, 'gust',     atmos_axes, Time, &
        'gust scale',    'm/s')
+
+  id_vort850     = &
+       register_diag_field ( mod_name, 'vort850',      atmos_axes, Time, &
+       '850 hPa relative vorticity',     '/s'    )
+
+  id_swfq     = &
+       register_diag_field ( mod_name, 'swfq',      atmos_axes, Time, &
+       'SWISHE application frequency',     ''    )
 
   id_t_flux     = &
        register_diag_field ( mod_name, 'shflx',      atmos_axes, Time, &
