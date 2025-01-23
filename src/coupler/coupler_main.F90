@@ -1628,6 +1628,13 @@ contains
        write(outunit,100) 'atm%v_bot', mpp_chksum(atm%v_bot)
        write(outunit,100) 'atm%p_surf', mpp_chksum(atm%p_surf)
        write(outunit,100) 'atm%gust', mpp_chksum(atm%gust)
+       ! Begin GR edit for SWISHE modifications
+       write(outunit,100) 'atm%vort850', mpp_chksum(atm%vort850)
+       write(outunit,100) 'atm%rh500',   mpp_chksum(atm%rh500)
+       write(outunit,100) 'atm%rh700',   mpp_chksum(atm%rh700)
+       write(outunit,100) 'atm%rh850',   mpp_chksum(atm%rh850)
+       write(outunit,100) 'atm%swfq',    mpp_chksum(atm%swfq)
+       ! End GR edit for SWISHE modifications
        do tr = 1,n_exch_tr
           n = tr_table(tr)%atm
           if(n /= NO_TRACER ) then
