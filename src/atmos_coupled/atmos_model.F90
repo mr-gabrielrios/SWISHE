@@ -84,6 +84,13 @@ public ice_atm_bnd_type_chksum
      real, pointer, dimension(:,:) :: p_bot    => null() ! pressure at lowest model level
      real, pointer, dimension(:,:) :: u_bot    => null() ! zonal wind component at lowest model level
      real, pointer, dimension(:,:) :: v_bot    => null() ! meridional wind component at lowest model level
+     ! Begin GR edit for SWISHE
+     real, pointer, dimension(:,:) :: vort850  => null()
+     real, pointer, dimension(:,:) :: rh500    => null()
+     real, pointer, dimension(:,:) :: rh700    => null()
+     real, pointer, dimension(:,:) :: rh850    => null()
+     real, pointer, dimension(:,:) :: swfq     => null()
+     ! End GR edit for SWISHE
      real, pointer, dimension(:,:) :: p_surf   => null() ! surface pressure 
      real, pointer, dimension(:,:) :: slp      => null() ! sea level pressure 
      real, pointer, dimension(:,:) :: gust     => null() ! gustiness factor
@@ -315,7 +322,8 @@ type (atmos_data_type), intent(inout) :: Atmos
 
     call atmosphere_up (Atmos%Time,  Surface_boundary%land_frac, Atmos%Surf_diff, &
                         Atmos%lprec, Atmos%fprec, Atmos%gust, &
-                        Surface_boundary%u_star, Surface_boundary%b_star, Surface_boundary%q_star)
+                        Surface_boundary%u_star, Surface_boundary%b_star, Surface_boundary%q_star, &
+                        Atmos%vort850, Atmos%rh500, Atmos%rh700, Atmos%rh850, Atmos%swfq) ! GR modification to `atmosphere_up` arguments
 
 !   --- advance time ---
 
@@ -442,6 +450,13 @@ type (time_type), intent(in) :: Time_init, Time, Time_step
                Atmos % u_bot    (nlon,nlat), &
                Atmos % v_bot    (nlon,nlat), &
                Atmos % p_surf   (nlon,nlat), &
+               ! Begin GR edits for SWISHE
+               Atmos % vort850  (nlon,nlat), &
+               Atmos % rh500    (nlon,nlat), &
+               Atmos % rh700    (nlon,nlat), &
+               Atmos % rh850    (nlon,nlat), &
+               Atmos % swfq     (nlon,nlat), &
+               ! End GR edits for SWISHE
                Atmos % slp      (nlon,nlat), &
                Atmos % gust     (nlon,nlat), &
                Atmos % flux_sw  (nlon,nlat), &
@@ -660,6 +675,13 @@ type (atmos_data_type), intent(inout) :: Atmos
                Atmos % u_bot    , &
                Atmos % v_bot    , &
                Atmos % p_surf   , &
+               ! Begin GR edits for SWISHE
+               Atmos % vort850  , &
+               Atmos % rh500    , &
+               Atmos % rh700    , &
+               Atmos % rh850    , &
+               Atmos % swfq     , &
+               ! End GR edits for SWISHE
                Atmos % slp      , &
                Atmos % gust     , &
                Atmos % flux_sw  , &
@@ -822,6 +844,13 @@ type(atmos_data_type), intent(in) :: atm
   write(outunit,100) ' atm%u_bot                  ', mpp_chksum(atm%u_bot                 )
   write(outunit,100) ' atm%v_bot                  ', mpp_chksum(atm%v_bot                 )
   write(outunit,100) ' atm%p_surf                 ', mpp_chksum(atm%p_surf                )
+  ! Begin GR edits for SWISHE
+  write(outunit,100) ' atm%vort850                ', mpp_chksum(atm%vort850               ) 
+  write(outunit,100) ' atm%rh500                  ', mpp_chksum(atm%rh500                 ) 
+  write(outunit,100) ' atm%rh700                  ', mpp_chksum(atm%rh700                 ) 
+  write(outunit,100) ' atm%rh850                  ', mpp_chksum(atm%rh850                 ) 
+  write(outunit,100) ' atm%swfq                   ', mpp_chksum(atm%swfq                  ) 
+  ! End GR edits for SWISHE
   write(outunit,100) ' atm%slp                    ', mpp_chksum(atm%slp                   )
   write(outunit,100) ' atm%gust                   ', mpp_chksum(atm%gust                  )
   write(outunit,100) ' atm%coszen                 ', mpp_chksum(atm%coszen                )
