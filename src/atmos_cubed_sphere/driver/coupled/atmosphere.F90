@@ -97,6 +97,7 @@ character(len=7)   :: mod_name = 'atmos'
   real    :: zvir
   integer :: npx, npy, npz, ncnst, pnats
   integer :: isc, iec, jsc, jec
+  integer :: isd, ied, jsd, jed       ! GR edit: index modification
   integer :: nq                       ! transported tracers
   integer :: sec, seconds, days
   integer :: id_dynam, id_phys_down, id_phys_up, id_fv_diag
@@ -198,6 +199,12 @@ contains
    iec = Atm(mytile)%bd%iec
    jsc = Atm(mytile)%bd%jsc
    jec = Atm(mytile)%bd%jec
+
+   ! GR edit: addition of domain-specific indices for mpp partitioning
+   isd = Atm(mytile)%bd%isd
+   ied = Atm(mytile)%bd%ied
+   jsd = Atm(mytile)%bd%jsd
+   jed = Atm(mytile)%bd%jed
 
    ! Allocate grid variables to be used to calculate gradient in 2nd order flux exchange
    ! This data is only needed for the COARSEST grid.
@@ -557,9 +564,10 @@ contains
  end subroutine atmosphere_down
 
 
-
+ ! GR edit: addition of SWISHE-specific arguments
  subroutine atmosphere_up ( Time,  frac_land, Surf_diff, lprec, fprec, gust, &
-                            u_star, b_star, q_star )
+                            u_star, b_star, q_star, &
+                            vort850, rh500, rh700, rh850, swfq)
 
    type(time_type),intent(in)         :: Time
    type(surf_diff_type), intent(inout):: Surf_diff
@@ -567,6 +575,7 @@ contains
    real, intent(inout), dimension(:,:):: gust
    real, intent(out), dimension(:,:)  :: lprec,   fprec
    real, intent(in), dimension(:,:)   :: u_star, b_star, q_star
+   real, intent(inout), dimension(:,:):: vort850, rh500, rh700, rh850, swfq ! GR edit: addition of SWISHE field definitions
 
    integer :: itrac
    type(time_type) :: Time_prev, Time_next
@@ -628,7 +637,9 @@ contains
    call nullify_domain()
                     call timing_off('ATMOSPHERE_UP_ETC')
    call timing_on('FV_DIAG')
-   call fv_diag(Atm(mytile:mytile), zvir, fv_time, Atm(mytile)%flagstruct%print_freq)
+   ! GR edit: modification of fv_diag to take SWISHE field arguments
+   call fv_diag(Atm(mytile:mytile), zvir, fv_time, Atm(mytile)%flagstruct%print_freq, &
+                vort850, rh500, rh700, rh850, swfq)
    call timing_off('FV_DIAG')
 
    call mpp_clock_end(id_fv_diag)
